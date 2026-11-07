@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>ReplayVideoAndroid</RootNamespace>
+    <AssemblyName>ReplayVideoAndroid</AssemblyName>
+    <ApplicationId>com.hellzgate.replayvideo</ApplicationId>
+    <ApplicationTitle>리플레이 영상</ApplicationTitle>
+    <ApplicationVersion>2</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
+    <PublishTrimmed>false</PublishTrimmed>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <EnableLLVM>false</EnableLLVM>
+    <Version>1.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SharpCompress" Version="0.48.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 리플레이 파서는 편집기 소스 재사용 -->
+    <Compile Include="..\WindBotAIEditor\Services\ReplayParser.cs" Link="ReplayParser.cs" />
+    <!-- 상태 머신은 윈도우 앱과 공용(정본) -->
+    <Compile Include="..\_shared\ReplaySim.cs" Link="ReplaySim.cs" />
+  </ItemGroup>
+
+</Project>

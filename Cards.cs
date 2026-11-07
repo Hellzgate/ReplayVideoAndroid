@@ -1,0 +1,411 @@
+// 카드 이름/설명/이미지 — EDOPro 없이 YGOPRODeck API 로 해결한다(안드로이드).
+//   이름: language=ko → (없으면) 영문 → #ID
+//   설명: API ko → 번역(한국어가 아니면) → 영문
+//   그림: images.ygoprodeck.com → 로컬 캐시
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+using WindBotAIEditor.Services;
+
+namespace ReplayVideoCore
+{
+    public sealed class CardRec
+    {
+        public string Name, Type, Desc;
+        public int Atk = -1, Def = -1;
+    }
+
+    public sealed class CardLibrary : ICardText
+    {
+        private readonly string _root;
+        private readonly string _pics;
+        private readonly Dictionary<int, CardRec> _api = new Dictionary<int, CardRec>();
+        private readonly HashSet<int> _koMiss = new HashSet<int>();
+        private readonly Dictionary<int, string> _names = new Dictionary<int, string>();
+        private readonly Dictionary<int, string> _descs = new Dictionary<int, string>();
+        private readonly Dictionary<int, string> _trans = new Dictionary<int, string>();
+        private readonly Dictionary<int, int> _atk = new Dictionary<int, int>();
+        private readonly object _lock = new object();
+
+        public bool ApiEnabled = true;
+        public bool TranslateEnabled = true;
+        public Action<string> Log;
+
+        public CardLibrary(string root, string picsDir)
+        {
+            _root = root;
+            _pics = picsDir;
+            try { Directory.CreateDirectory(CardsDir); } catch { }
+            try { Directory.CreateDirectory(ImgDir); } catch { }
+            try { Directory.CreateDirectory(TransDir); } catch { }
+        }
+
+        private string CardsDir { get { return Path.Combine(_root, "cards"); } }
+        private string ImgDir { get { return Path.Combine(_root, "imgcache"); } }
+        private string TransDir { get { return Path.Combine(_root, "trans"); } }
+
+        // ── 미리 받기 ─────────────────────────────────────────
+        public void Prefetch(ReplayFile rep, Action<int, int> progress)
+        {
+            if (!ApiEnabled) return;
+            var codes = new List<int>();
+            var seen = new HashSet<int>();
+            var hi = new HashSet<int>();
+            foreach (ReplayPacket p in rep.Packets)
+            {
+                int code = 0;
+                switch (p.Message)
+                {
+                    case ReplayMsg.MOVE:
+                    case ReplayMsg.SUMMONING:
+                    case ReplayMsg.SPSUMMONING:
+                    case ReplayMsg.SET:
+                    case ReplayMsg.CHAINING:
+                    case ReplayMsg.ATTACK:
+                    case ReplayMsg.POS_CHANGE:
+                        code = p.Length >= 4 ? (int)p.U32(0) : 0; break;
+                    case ReplayMsg.DRAW:
+                        int cnt = p.U8(1), off = 5;
+                        for (int k = 0; k < cnt && off + 4 <= p.Length; k++, off += 8)
+                        {
+                            int cc = (int)p.U32(off);
+                            if (cc > 0 && seen.Add(cc)) codes.Add(cc);
+                        }
+                        continue;
+                }
+                if (code > 0 && seen.Add(code)) codes.Add(code);
+                if (code > 0 && p.Message == ReplayMsg.CHAINING) hi.Add(code);
+            }
+
+            int total = codes.Count, next = -1, done = 0;
+            var tasks = new List<Task>();
+            for (int t = 0; t < 4; t++)
+                tasks.Add(Task.Run(delegate
+                {
+                    while (true)
+                    {
+                        int i = System.Threading.Interlocked.Increment(ref next);
+                        if (i >= total) break;
+                        ApiRec(codes[i]);
+                        if (hi.Contains(codes[i])) DownloadImage(codes[i]);
+                        int d = System.Threading.Interlocked.Increment(ref done);
+                        if (progress != null) progress(d, total);
+                    }
+                }));
+            try { Task.WaitAll(tasks.ToArray()); } catch { }
+            Log?.Invoke("카드 정보 " + total + "종 준비");
+        }
+
+        /// <summary>설명 번역을 미리 데운다(2 병렬, 최대 40종).</summary>
+        public void WarmTranslations()
+        {
+            if (!TranslateEnabled) return;
+            var codes = new List<int>();
+            lock (_api) foreach (int k in _api.Keys) codes.Add(k);
+            if (codes.Count == 0) return;
+            int total = Math.Min(codes.Count, 40), next = -1;
+            var tasks = new List<Task>();
+            for (int t = 0; t < 2; t++)
+                tasks.Add(Task.Run(delegate
+                {
+                    while (true)
+                    {
+                        int i = System.Threading.Interlocked.Increment(ref next);
+                        if (i >= total) break;
+                        DescKo(codes[i]);
+                    }
+                }));
+            try { Task.WaitAll(tasks.ToArray()); } catch { }
+        }
+
+        // ── ICardText ─────────────────────────────────────────
+        public string NameOf(int code)
+        {
+            if (code <= 0) return "";
+            lock (_names) { string v; if (_names.TryGetValue(code, out v)) return v; }
+
+            CardRec ko = ApiKo(code);
+            if (ko != null && !string.IsNullOrEmpty(ko.Name) && HasHangul(ko.Name))
+            { lock (_names) _names[code] = ko.Name; return ko.Name; }
+
+            CardRec r = ApiRec(code);
+            string name = (r != null && !string.IsNullOrEmpty(r.Name)) ? r.Name : ("#" + code);
+            lock (_names) _names[code] = name;
+            return name;
+        }
+
+        public string DescOf(int code)
+        {
+            if (code <= 0) return null;
+            lock (_descs) { string v; if (_descs.TryGetValue(code, out v)) return v; }
+
+            CardRec ko = ApiKo(code);
+            if (ko != null && !string.IsNullOrEmpty(ko.Desc)) { lock (_descs) _descs[code] = ko.Desc; return ko.Desc; }
+            CardRec r = ApiRec(code);
+            string d = (r != null) ? r.Desc : null;
+            lock (_descs) _descs[code] = d;
+            return d;
+        }
+
+        public int AtkOf(int code)
+        {
+            if (code <= 0) return -1;
+            lock (_atk) { int v; if (_atk.TryGetValue(code, out v)) return v; }
+            CardRec r = ApiRec(code);
+            int a = (r != null) ? r.Atk : -1;
+            lock (_atk) _atk[code] = a;
+            return a;
+        }
+
+        /// <summary>효과 텍스트(한국어). 이미 한국어면 그대로, 영문이면 번역.</summary>
+        public string DescKo(int code)
+        {
+            if (code <= 0) return null;
+            lock (_trans) { string v; if (_trans.TryGetValue(code, out v)) return v; }
+
+            string desc = DescOf(code);
+            if (string.IsNullOrEmpty(desc)) { lock (_trans) _trans[code] = null; return null; }
+            if (HasHangul(desc)) { lock (_trans) _trans[code] = desc; return desc; }
+            if (!TranslateEnabled) { lock (_trans) _trans[code] = desc; return desc; }
+
+            string key = Sha1(desc);
+            string path = Path.Combine(TransDir, key + ".txt");
+            try { if (File.Exists(path)) { string v = File.ReadAllText(path); lock (_trans) _trans[code] = v; return v; } } catch { }
+
+            string tr = null;
+            try
+            {
+                string url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ko&dt=t&q="
+                             + Uri.EscapeDataString(desc);
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Timeout = 8000;
+                req.UserAgent = "ReplayVideoAndroid/1.0";
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var s = resp.GetResponseStream())
+                using (var sr = new StreamReader(s, Encoding.UTF8))
+                {
+                    string json = sr.ReadToEnd();
+                    var sb = new StringBuilder();
+                    using (JsonDocument doc = JsonDocument.Parse(json))
+                    {
+                        JsonElement root = doc.RootElement;
+                        if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0 &&
+                            root[0].ValueKind == JsonValueKind.Array)
+                            foreach (JsonElement line in root[0].EnumerateArray())
+                                if (line.ValueKind == JsonValueKind.Array && line.GetArrayLength() > 0 &&
+                                    line[0].ValueKind == JsonValueKind.String)
+                                    sb.Append(line[0].GetString());
+                    }
+                    tr = sb.Length > 0 ? sb.ToString() : null;
+                }
+            }
+            catch { tr = null; }
+
+            if (!string.IsNullOrEmpty(tr))
+            {
+                try { File.WriteAllText(path, tr, Encoding.UTF8); } catch { }
+            }
+            else tr = desc;
+            lock (_trans) _trans[code] = tr;
+            return tr;
+        }
+
+        // ── 이미지 ────────────────────────────────────────────
+        public string LocalImagePath(int code)
+        {
+            if (string.IsNullOrEmpty(_pics) || code <= 0) return null;
+            try
+            {
+                string p = Path.Combine(_pics, code + ".jpg");
+                if (File.Exists(p)) return p;
+            }
+            catch { }
+            return null;
+        }
+
+        public string CachedImagePath(int code)
+        {
+            try
+            {
+                string p = Path.Combine(ImgDir, code + ".jpg");
+                if (File.Exists(p)) return p;
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>로컬 pics → 캐시 → (없으면) 다운로드.</summary>
+        public string ImagePath(int code)
+        {
+            string p = LocalImagePath(code);
+            if (p != null) return p;
+            p = CachedImagePath(code);
+            if (p != null) return p;
+            if (!ApiEnabled) return null;
+            DownloadImage(code);
+            return CachedImagePath(code);
+        }
+
+        /// <summary>컷인용 — 내려받은 고해상도만(없으면 null → 렌더러가 일반 이미지로 폴백).</summary>
+        public string HiImagePath(int code)
+        {
+            return CachedImagePath(code);
+        }
+
+        public void DownloadImage(int code)
+        {
+            if (!ApiEnabled || code <= 0) return;
+            if (CachedImagePath(code) != null) return;
+            string dst = Path.Combine(ImgDir, code + ".jpg");
+            string tmp = dst + ".tmp";
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create("https://images.ygoprodeck.com/images/cards/" + code + ".jpg");
+                req.Timeout = 12000;
+                req.UserAgent = "ReplayVideoAndroid/1.0";
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var s = resp.GetResponseStream())
+                using (var fs = File.Create(tmp))
+                    s.CopyTo(fs);
+                try { if (File.Exists(dst)) File.Delete(dst); } catch { }
+                File.Move(tmp, dst);
+            }
+            catch
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            }
+        }
+
+        // ── API ───────────────────────────────────────────────
+        private CardRec ApiKo(int code)
+        {
+            if (!ApiEnabled || code <= 0) return null;
+            lock (_koMiss) if (_koMiss.Contains(code)) return null;
+            string p = Path.Combine(CardsDir, code + ".ko.json");
+            try
+            {
+                if (File.Exists(p))
+                {
+                    CardRec r = Parse(File.ReadAllText(p));
+                    if (r != null && !string.IsNullOrEmpty(r.Name)) return r;
+                }
+            }
+            catch { }
+            try
+            {
+                string json = Get("https://db.ygoprodeck.com/api/v7/cardinfo.php?id=" + code + "&language=ko");
+                CardRec rr = Parse(json);
+                if (rr != null && !string.IsNullOrEmpty(rr.Name))
+                {
+                    try { File.WriteAllText(p, json, Encoding.UTF8); } catch { }
+                    return rr;
+                }
+            }
+            catch { }
+            lock (_koMiss) _koMiss.Add(code);
+            return null;
+        }
+
+        private CardRec ApiRec(int code)
+        {
+            if (!ApiEnabled || code <= 0) return null;
+            lock (_api) { CardRec c; if (_api.TryGetValue(code, out c)) return c; }
+
+            foreach (string lang in new[] { "ko", "en" })
+            {
+                string p = Path.Combine(CardsDir, code + "." + lang + ".json");
+                try
+                {
+                    if (File.Exists(p))
+                    {
+                        CardRec r = Parse(File.ReadAllText(p));
+                        if (r != null && !string.IsNullOrEmpty(r.Name)) { lock (_api) _api[code] = r; return r; }
+                    }
+                }
+                catch { }
+            }
+            foreach (string lang in new[] { "ko", "" })
+            {
+                try
+                {
+                    string url = "https://db.ygoprodeck.com/api/v7/cardinfo.php?id=" + code
+                                 + (lang.Length > 0 ? "&language=" + lang : "");
+                    string json = Get(url);
+                    CardRec r = Parse(json);
+                    if (r != null && !string.IsNullOrEmpty(r.Name))
+                    {
+                        try
+                        {
+                            File.WriteAllText(Path.Combine(CardsDir, code + "." + (lang.Length > 0 ? lang : "en") + ".json"),
+                                json, Encoding.UTF8);
+                        }
+                        catch { }
+                        lock (_api) _api[code] = r;
+                        return r;
+                    }
+                }
+                catch { }
+            }
+            lock (_api) _api[code] = null;
+            return null;
+        }
+
+        private static string Get(string url)
+        {
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.Timeout = 10000;
+            req.UserAgent = "ReplayVideoAndroid/1.0";
+            using (var resp = (HttpWebResponse)req.GetResponse())
+            using (var s = resp.GetResponseStream())
+            using (var sr = new StreamReader(s, Encoding.UTF8))
+                return sr.ReadToEnd();
+        }
+
+        private static CardRec Parse(string json)
+        {
+            try
+            {
+                using (JsonDocument doc = JsonDocument.Parse(json))
+                {
+                    JsonElement root = doc.RootElement;
+                    JsonElement data;
+                    if (!root.TryGetProperty("data", out data)) return null;
+                    if (data.ValueKind != JsonValueKind.Array || data.GetArrayLength() == 0) return null;
+                    JsonElement c = data[0];
+                    var rec = new CardRec();
+                    JsonElement t;
+                    rec.Name = c.TryGetProperty("name", out t) ? t.GetString() : null;
+                    rec.Type = c.TryGetProperty("type", out t) ? t.GetString() : null;
+                    rec.Desc = c.TryGetProperty("desc", out t) ? t.GetString() : null;
+                    if (c.TryGetProperty("atk", out t) && t.ValueKind == JsonValueKind.Number) rec.Atk = t.GetInt32();
+                    if (c.TryGetProperty("def", out t) && t.ValueKind == JsonValueKind.Number) rec.Def = t.GetInt32();
+                    return rec;
+                }
+            }
+            catch { return null; }
+        }
+
+        // ── 유틸 ──────────────────────────────────────────────
+        public static bool HasHangul(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            foreach (char ch in s) if (ch >= 0xAC00 && ch <= 0xD7A3) return true;
+            return false;
+        }
+
+        private static string Sha1(string s)
+        {
+            using (var sha = System.Security.Cryptography.SHA1.Create())
+            {
+                byte[] h = sha.ComputeHash(Encoding.UTF8.GetBytes(s));
+                var sb = new StringBuilder();
+                foreach (byte b in h) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+    }
+}
