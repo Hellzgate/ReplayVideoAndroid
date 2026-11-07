@@ -11,12 +11,19 @@
 | 입력 | 리플레이 파일 선택(SAF) · `testReplay` adb 훅 |
 | 옵션 | fps(8/12/15/24) · 세로 1080×1920 / 가로 1400×820 |
 | 출력 | `Movies/ReplayVideo` 에 저장(MediaStore) · 공유/열기 |
-| 카드 정보 | **cdb(레포) → API** 순서 · 효과 한글 번역 · 이미지 캐시 |
+| 카드 정보 | **cdb(내장 cdb → 레포) → API** 순서 · 효과 한글 번역 · 이미지 캐시 |
+| **내장 카드 DB** | APK 에 `cards.cdb`·`cards-en.cdb` 를 넣고 첫 실행 때 풀어서 사용(인터넷 없이도 이름/공격력) |
 | **카드 DB 레포** | EDOPro 와 같은 레포에서 cdb 를 **zip 으로 받아** 사용(앱 전용 저장소) |
 | 기타 | 진행률·로그·취소 · 다크 테마 |
 
-## 카드 DB 레포 (v1.1)
+## 카드 DB — 내장 cdb + 레포 (v1.2)
 
+### 내장 cdb
+APK **assets/carddata/** 에 `cards.cdb`(6.6MB) · `cards-en.cdb`(4.2MB) 를 넣었습니다.
+첫 실행(또는 앱 버전 변경) 때 `Android/data/com.hellzgate.replayvideo/files/cdb/bundled/` 로 풀립니다.
+→ **인터넷·EDOPro 없이도** 카드 이름/공격력이 나옵니다(커스텀 카드는 레포/API 보완).
+
+### 레포
 EDOPro 의 `configs.json` + `user_configs.json` 에 있던 레포를 기본 목록으로 넣었습니다.
 
 - **[카드 DB (레포)]** → 목록(체크로 사용/제외) → **[받기 / 갱신]**
@@ -26,8 +33,7 @@ EDOPro 의 `configs.json` + `user_configs.json` 에 있던 레포를 기본 목�
   1. cdb 이름이 **한국어**면 그대로
   2. YGOPRODeck API 한국어
   3. cdb 이름(영문 등 — **API 에 없는 커스텀 카드**가 여기서 해결)
-  4. API 영문 → `#ID`
-- 효과 텍스트도 같은 순서(없으면 Google 번역)
+  4. API 영문 → `#ID`- 효과 텍스트도 같은 순서(없으면 Google 번역)
 - cdb 는 SQLite 이므로 `Microsoft.Data.Sqlite` + `libe_sqlite3.so`(arm64/arm) 포함 → APK **약 +2.8MB**
 
 기본 레포: `Team-AllYGOPro/edopro-korean` · `edopro-korean-delta` · `Hellzgate/EdoKroCDB` · `CCC-Server/EMP-TY` · `ProjectIgnis/DeltaBagooska`

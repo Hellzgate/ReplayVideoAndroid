@@ -162,6 +162,7 @@ namespace ReplayVideoAndroid
                 // 저장 위치는 **외부 앱 폴더**(Android/data/<pkg>/files) — 영상과 같은 곳, C:/내부 저장소 절약
                 string baseDir = (GetExternalFilesDir(null)?.AbsolutePath) ?? FilesDir.AbsolutePath;
                 CdbRepoStore.Init(baseDir);
+                EnsureBundledCdb();          // APK 에 내장된 cards.cdb / cards-en.cdb 풀기
                 LoadCdb();
             }
             catch (Exception ex) { LogLine("카드DB 초기화 오류: " + ex.Message); }
@@ -248,6 +249,54 @@ namespace ReplayVideoAndroid
         }
 
         // ── 카드 DB(cdb) ───────────────────────────────────────
+        /// <summary>APK assets/carddata/*.cdb 를 외부 앱 폴더로 풀어 둔다(앱 버전이 바뀌면 다시).</summary>
+        private void EnsureBundledCdb()
+        {
+            try
+            {
+                string dir = CdbRepoStore.BundledDir;
+                if (string.IsNullOrEmpty(dir)) return;
+                Directory.CreateDirectory(dir);
+
+                string[] list = null;
+                try { list = Assets.List("carddata"); } catch { }
+                if (list == null || list.Length == 0) { LogLine("내장 카드DB: 없음"); return; }
+
+                // 앱 버전이 바뀌면 내장 cdb 를 새로 푼다(asset 은 길이를 못 알려준다)
+                string stampFile = Path.Combine(dir, ".appver");
+                string ver = "";
+                try { ver = PackageManager.GetPackageInfo(PackageName, 0).VersionCode.ToString(); } catch { }
+                bool needAll = true;
+                try { needAll = !File.Exists(stampFile) || File.ReadAllText(stampFile).Trim() != ver; } catch { }
+
+                int copied = 0;
+                foreach (string n in list)
+                {
+                    if (!n.EndsWith(".cdb", StringComparison.OrdinalIgnoreCase)) continue;
+                    string dst = Path.Combine(dir, n);
+                    try
+                    {
+                        if (!needAll && File.Exists(dst) && new FileInfo(dst).Length > 1024) continue;
+                        byte[] bytes;
+                        using (var src = Assets.Open("carddata/" + n))
+                        using (var ms = new MemoryStream())
+                        {
+                            src.CopyTo(ms);
+                            bytes = ms.ToArray();
+                        }
+                        if (bytes.Length < 1024) { LogLine("내장 cdb 가 비었습니다: " + n); continue; }
+                        File.WriteAllBytes(dst, bytes);
+                        copied++;
+                    }
+                    catch (Exception ex) { LogLine("내장 cdb 복사 실패 " + n + ": " + ex.Message); }
+                }
+                try { File.WriteAllText(stampFile, ver); } catch { }
+                int have = Directory.GetFiles(dir, "*.cdb").Length;
+                LogLine(string.Format("내장 카드DB: {0}개 준비 (새로 {1}개)", have, copied));
+            }
+            catch (Exception ex) { LogLine("내장 카드DB 오류: " + ex.Message); }
+        }
+
         private void LoadCdb()
         {
             try

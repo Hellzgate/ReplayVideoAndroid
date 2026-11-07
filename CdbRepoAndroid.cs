@@ -60,6 +60,12 @@ namespace ReplayVideoCore
             return Path.Combine(CacheRoot, r.Slug);
         }
 
+        /// <summary>APK 에 내장된 기본 cdb 를 풀어 두는 폴더.</summary>
+        public static string BundledDir
+        {
+            get { return string.IsNullOrEmpty(_root) ? "" : Path.Combine(_root, "bundled"); }
+        }
+
         private static string ListPath
         {
             get { return string.IsNullOrEmpty(_root) ? "" : Path.Combine(_root, "repos.json"); }
@@ -207,19 +213,29 @@ namespace ReplayVideoCore
         public static List<string> ResolveCdbFiles(IEnumerable<CdbRepo> repos)
         {
             var files = new List<string>();
-            if (repos == null) return files;
-            foreach (var r in repos)
-            {
-                if (!r.Enabled) continue;
-                string d = LocalDirOf(r);
-                if (!Directory.Exists(d)) continue;
-                try
+            if (repos != null)
+                foreach (var r in repos)
                 {
-                    foreach (string f in Directory.GetFiles(d, "*.cdb", SearchOption.AllDirectories))
-                        if (!files.Contains(f)) files.Add(f);
+                    if (!r.Enabled) continue;
+                    string d = LocalDirOf(r);
+                    if (!Directory.Exists(d)) continue;
+                    try
+                    {
+                        foreach (string f in Directory.GetFiles(d, "*.cdb", SearchOption.AllDirectories))
+                            if (!files.Contains(f)) files.Add(f);
+                    }
+                    catch { }
                 }
-                catch { }
+            // 내장(배포 포함) cdb — 레포가 없을 때의 기본값
+            try
+            {
+                string b = BundledDir;
+                if (!string.IsNullOrEmpty(b) && Directory.Exists(b))
+                    foreach (string f in Directory.GetFiles(b, "*.cdb"))
+                        if (!files.Contains(f)) files.Add(f);
             }
+            catch { }
+
             // 한국어 우선 정렬(안정 정렬)
             var ordered = new List<string>();
             for (int rank = 0; rank <= 1; rank++)
