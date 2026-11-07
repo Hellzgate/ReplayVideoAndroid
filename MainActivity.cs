@@ -159,7 +159,9 @@ namespace ReplayVideoAndroid
             // 카드 DB(cdb) — 레포에서 받은 cdb 가 있으면 API 보다 먼저 쓴다
             try
             {
-                CdbRepoStore.Init(FilesDir.AbsolutePath);
+                // 저장 위치는 **외부 앱 폴더**(Android/data/<pkg>/files) — 영상과 같은 곳, C:/내부 저장소 절약
+                string baseDir = (GetExternalFilesDir(null)?.AbsolutePath) ?? FilesDir.AbsolutePath;
+                CdbRepoStore.Init(baseDir);
                 LoadCdb();
             }
             catch (Exception ex) { LogLine("카드DB 초기화 오류: " + ex.Message); }
