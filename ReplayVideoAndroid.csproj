@@ -10,15 +10,15 @@
     <AssemblyName>ReplayVideoAndroid</AssemblyName>
     <ApplicationId>com.hellzgate.replayvideo</ApplicationId>
     <ApplicationTitle>리플레이 영상</ApplicationTitle>
-    <ApplicationVersion>5</ApplicationVersion>
-    <ApplicationDisplayVersion>1.2.1</ApplicationDisplayVersion>
+    <ApplicationVersion>6</ApplicationVersion>
+    <ApplicationDisplayVersion>1.2.2</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
     <EnableLLVM>false</EnableLLVM>
-    <Version>1.2.1</Version>
-    <FileVersion>1.2.1.0</FileVersion>
+    <Version>1.2.2</Version>
+    <FileVersion>1.2.2.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

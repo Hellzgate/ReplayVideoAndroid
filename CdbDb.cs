@@ -14,6 +14,7 @@ namespace ReplayVideoCore
         public string Desc;
         public int Atk = -1;
         public int Def = -1;
+        public int Alias;
     }
 
     public sealed class CdbDb
@@ -88,7 +89,7 @@ namespace ReplayVideoCore
                         using (var cmd = conn.CreateCommand())
                         {
                             cmd.CommandText =
-                                "SELECT t.name, t.desc, d.atk, d.def FROM texts t " +
+                                "SELECT t.name, t.desc, d.atk, d.def, IFNULL(d.alias, 0) FROM texts t " +
                                 "LEFT JOIN datas d ON d.id = t.id WHERE t.id = $id LIMIT 1";
                             cmd.Parameters.AddWithValue("$id", id);
                             using (var rd = cmd.ExecuteReader())
@@ -100,6 +101,7 @@ namespace ReplayVideoCore
                                     c.Desc = rd.IsDBNull(1) ? null : rd.GetString(1);
                                     c.Atk = rd.IsDBNull(2) ? -1 : rd.GetInt32(2);
                                     c.Def = rd.IsDBNull(3) ? -1 : rd.GetInt32(3);
+                                    c.Alias = rd.IsDBNull(4) ? 0 : rd.GetInt32(4);
                                     if (!string.IsNullOrEmpty(c.Name) || !string.IsNullOrEmpty(c.Desc)) { found = c; break; }
                                 }
                             }

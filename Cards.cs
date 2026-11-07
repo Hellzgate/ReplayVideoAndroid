@@ -288,53 +288,126 @@ namespace ReplayVideoCore
             return CachedImagePath(code);
         }
 
-        /// <summary>이미지 다운로드 — 후보 URL 3개(cards → cards_small → cards_cropped) · 일시 오류는 3회 재시도(404 는 다음 후보).</summary>
+        /// <summary>이미지 다운로드 — ① 같은 ID ② cdb alias(원본 ID) ③ cdb 영문 이름으로 YGOPRODeck 검색 ④ Yugipedia.
+        ///   각 단계마다 cards → cards_small → cards_cropped 후보, 일시 오류 3회 재시도(404 는 다음 후보).</summary>
         public void DownloadImage(int code)
         {
             if (!ApiEnabled || code <= 0) return;
             if (CachedImagePath(code) != null) return;
             string dst = Path.Combine(ImgDir, code + ".jpg");
-            string tmp = dst + ".tmp";
+
+            CdbCard cd = null;
+            if (Cdb != null) Cdb.TryGet(code, out cd);
+
+            var ids = new List<int> { code };
+            if (cd != null && cd.Alias > 0 && !ids.Contains(cd.Alias)) ids.Add(cd.Alias);
+            foreach (int id in ids) if (DownloadById(dst, id)) return;
+
+            string name = (cd != null && !string.IsNullOrEmpty(cd.Name) && !CardLibrary.HasHangul(cd.Name)) ? cd.Name : null;
+            if (name != null)
+            {
+                int found = SearchYgoProDeckId(name);
+                if (found > 0 && found != code && DownloadById(dst, found)) return;
+                string url = SearchYugipediaImage(name);
+                if (!string.IsNullOrEmpty(url) && DownloadUrl(dst, url)) return;
+            }
+            try { if (File.Exists(dst)) File.Delete(dst); } catch { }
+        }
+
+        private bool DownloadById(string dst, int id)
+        {
             string[] urls =
             {
-                "https://images.ygoprodeck.com/images/cards/" + code + ".jpg",
-                "https://images.ygoprodeck.com/images/cards_small/" + code + ".jpg",
-                "https://images.ygoprodeck.com/images/cards_cropped/" + code + ".jpg"
+                "https://images.ygoprodeck.com/images/cards/" + id + ".jpg",
+                "https://images.ygoprodeck.com/images/cards_small/" + id + ".jpg",
+                "https://images.ygoprodeck.com/images/cards_cropped/" + id + ".jpg"
             };
-            foreach (string url in urls)
+            foreach (string u in urls) if (DownloadUrl(dst, u)) return true;
+            return false;
+        }
+
+        /// <summary>URL 하나를 받아 저장(임시 파일 → 교체). 404 는 포기, 그 외 3회 재시도, HTML 오류 페이지 거름.</summary>
+        private bool DownloadUrl(string dst, string url)
+        {
+            string tmp = dst + ".tmp";
+            for (int attempt = 0; attempt < 3; attempt++)
             {
-                for (int attempt = 0; attempt < 3; attempt++)
+                try
                 {
-                    try
-                    {
-                        var req = (HttpWebRequest)WebRequest.Create(url);
-                        req.Timeout = 12000;
-                        req.ReadWriteTimeout = 12000;
-                        req.UserAgent = "ReplayVideoAndroid/1.0";
-                        using (var resp = (HttpWebResponse)req.GetResponse())
-                        using (var s = resp.GetResponseStream())
-                        using (var fs = File.Create(tmp))
-                            s.CopyTo(fs);
-                        if (new FileInfo(tmp).Length < 512) throw new Exception("empty image");
-                        try { if (File.Exists(dst)) File.Delete(dst); } catch { }
-                        File.Move(tmp, dst);
-                        return;
-                    }
-                    catch (WebException wex)
-                    {
-                        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
-                        var http = wex.Response as HttpWebResponse;
-                        if (http != null && (int)http.StatusCode == 404) break;      // 이 URL 은 없음 → 다음 후보
-                        if (attempt < 2) System.Threading.Thread.Sleep(300 * (attempt + 1));
-                    }
-                    catch
-                    {
-                        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
-                        if (attempt < 2) System.Threading.Thread.Sleep(300 * (attempt + 1));
-                    }
+                    var req = (HttpWebRequest)WebRequest.Create(url);
+                    req.Timeout = 12000;
+                    req.ReadWriteTimeout = 12000;
+                    req.UserAgent = "ReplayVideoAndroid/1.1 (+https://github.com/Hellzgate/ReplayVideoApp)";
+                    using (var resp = (HttpWebResponse)req.GetResponse())
+                    using (var s = resp.GetResponseStream())
+                    using (var fs = File.Create(tmp))
+                        s.CopyTo(fs);
+                    if (new FileInfo(tmp).Length < 512) throw new Exception("empty image");
+                    try { if (File.Exists(dst)) File.Delete(dst); } catch { }
+                    File.Move(tmp, dst);
+                    return true;
+                }
+                catch (WebException wex)
+                {
+                    try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                    var http = wex.Response as HttpWebResponse;
+                    if (http != null && (int)http.StatusCode == 404) return false;
+                    if (attempt < 2) System.Threading.Thread.Sleep(300 * (attempt + 1));
+                }
+                catch
+                {
+                    try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                    if (attempt < 2) System.Threading.Thread.Sleep(300 * (attempt + 1));
                 }
             }
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            return false;
+        }
+
+        private static int SearchYgoProDeckId(string name)
+        {
+            try
+            {
+                string url = "https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=" + Uri.EscapeDataString(name) + "&num=1&offset=0";
+                string json = SimpleGet(url);
+                if (string.IsNullOrEmpty(json)) return 0;
+                var m = System.Text.RegularExpressions.Regex.Match(json, "\"id\"\\s*:\\s*(\\d+)");
+                int id;
+                return (m.Success && int.TryParse(m.Groups[1].Value, out id)) ? id : 0;
+            }
+            catch { return 0; }
+        }
+
+        private static string SearchYugipediaImage(string name)
+        {
+            try
+            {
+                string url = "https://yugipedia.com/api.php?action=query&titles=" + Uri.EscapeDataString(name)
+                           + "&prop=pageimages&piprop=original&redirects=1&format=json";
+                string json = SimpleGet(url);
+                var m = System.Text.RegularExpressions.Regex.Match(json ?? "", "\"source\"\\s*:\\s*\"([^\"]+)\"");
+                if (m.Success) return m.Groups[1].Value.Replace("\\/", "/");
+                string url2 = "https://yugipedia.com/api.php?action=query&generator=search&gsrsearch=" + Uri.EscapeDataString(name)
+                            + "&gsrlimit=1&prop=pageimages&piprop=original&format=json";
+                json = SimpleGet(url2);
+                m = System.Text.RegularExpressions.Regex.Match(json ?? "", "\"source\"\\s*:\\s*\"([^\"]+)\"");
+                return m.Success ? m.Groups[1].Value.Replace("\\/", "/") : null;
+            }
+            catch { return null; }
+        }
+
+        private static string SimpleGet(string url)
+        {
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Timeout = 12000;
+                req.UserAgent = "ReplayVideoAndroid/1.1 (+https://github.com/Hellzgate/ReplayVideoApp)";
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var s = resp.GetResponseStream())
+                using (var sr = new StreamReader(s, Encoding.UTF8))
+                    return sr.ReadToEnd();
+            }
+            catch { return null; }
         }
 
         // ── API ───────────────────────────────────────────────
