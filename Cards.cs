@@ -288,28 +288,53 @@ namespace ReplayVideoCore
             return CachedImagePath(code);
         }
 
+        /// <summary>이미지 다운로드 — 후보 URL 3개(cards → cards_small → cards_cropped) · 일시 오류는 3회 재시도(404 는 다음 후보).</summary>
         public void DownloadImage(int code)
         {
             if (!ApiEnabled || code <= 0) return;
             if (CachedImagePath(code) != null) return;
             string dst = Path.Combine(ImgDir, code + ".jpg");
             string tmp = dst + ".tmp";
-            try
+            string[] urls =
             {
-                var req = (HttpWebRequest)WebRequest.Create("https://images.ygoprodeck.com/images/cards/" + code + ".jpg");
-                req.Timeout = 12000;
-                req.UserAgent = "ReplayVideoAndroid/1.0";
-                using (var resp = (HttpWebResponse)req.GetResponse())
-                using (var s = resp.GetResponseStream())
-                using (var fs = File.Create(tmp))
-                    s.CopyTo(fs);
-                try { if (File.Exists(dst)) File.Delete(dst); } catch { }
-                File.Move(tmp, dst);
-            }
-            catch
+                "https://images.ygoprodeck.com/images/cards/" + code + ".jpg",
+                "https://images.ygoprodeck.com/images/cards_small/" + code + ".jpg",
+                "https://images.ygoprodeck.com/images/cards_cropped/" + code + ".jpg"
+            };
+            foreach (string url in urls)
             {
-                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    try
+                    {
+                        var req = (HttpWebRequest)WebRequest.Create(url);
+                        req.Timeout = 12000;
+                        req.ReadWriteTimeout = 12000;
+                        req.UserAgent = "ReplayVideoAndroid/1.0";
+                        using (var resp = (HttpWebResponse)req.GetResponse())
+                        using (var s = resp.GetResponseStream())
+                        using (var fs = File.Create(tmp))
+                            s.CopyTo(fs);
+                        if (new FileInfo(tmp).Length < 512) throw new Exception("empty image");
+                        try { if (File.Exists(dst)) File.Delete(dst); } catch { }
+                        File.Move(tmp, dst);
+                        return;
+                    }
+                    catch (WebException wex)
+                    {
+                        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                        var http = wex.Response as HttpWebResponse;
+                        if (http != null && (int)http.StatusCode == 404) break;      // 이 URL 은 없음 → 다음 후보
+                        if (attempt < 2) System.Threading.Thread.Sleep(300 * (attempt + 1));
+                    }
+                    catch
+                    {
+                        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                        if (attempt < 2) System.Threading.Thread.Sleep(300 * (attempt + 1));
+                    }
+                }
             }
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
         }
 
         // ── API ───────────────────────────────────────────────
