@@ -24,8 +24,9 @@ namespace ReplayVideoAndroid
 
         private TextView _info, _status, _log;
         private ProgressBar _bar;
-        private Button _pick, _render, _cancel, _share;
+        private Button _pick, _render, _cancel, _share, _cdbBtn;
         private Spinner _fps, _layout;
+        private CdbDb _cdb;
 
         private string _replayPath;
         private string _outPath;
@@ -119,6 +120,10 @@ namespace ReplayVideoAndroid
             _render.Click += OnRender;
             root.AddView(_render);
 
+            _cdbBtn = MakeButton("카드 DB (레포)");
+            _cdbBtn.Click += delegate { ShowCdbDialog(); };
+            root.AddView(_cdbBtn);
+
             _cancel = MakeButton("취소");
             _cancel.Enabled = false;
             _cancel.Click += delegate { _cancelRequested = true; SetStatus("취소 요청…"); };
@@ -150,6 +155,62 @@ namespace ReplayVideoAndroid
             root.AddView(scroll, lp);
 
             SetContentView(root);
+
+            // 카드 DB(cdb) — 레포에서 받은 cdb 가 있으면 API 보다 먼저 쓴다
+            try
+            {
+                CdbRepoStore.Init(FilesDir.AbsolutePath);
+                LoadCdb();
+            }
+            catch (Exception ex) { LogLine("카드DB 초기화 오류: " + ex.Message); }
+
+            // 검증용: 특정 카드ID 의 cdb 조회 결과를 로그로 확인
+            //   am start … --es cdbProbe "101403001,100458022"
+            try
+            {
+                string probe = Intent.GetStringExtra("cdbProbe");
+                if (!string.IsNullOrEmpty(probe))
+                {
+                    foreach (string s in probe.Split(','))
+                    {
+                        int id;
+                        if (!int.TryParse(s.Trim(), out id)) continue;
+                        CdbCard c = null;
+                        if (_cdb != null) _cdb.TryGet(id, out c);
+                        if (c == null) { LogLine(string.Format("probe {0} → (없음)", id)); continue; }
+                        string desc = c.Desc ?? "";
+                        if (desc.Length > 60) desc = desc.Substring(0, 60) + "…";
+                        LogLine(string.Format("probe {0} → {1} | atk {2} | {3}", id, c.Name, c.Atk, desc.Replace("\n", " ")));
+                    }
+                }
+            }
+            catch (Exception ex) { LogLine("cdbProbe 훅 오류: " + ex.Message); }
+
+            // 검증용: adb 로 특정 레포만 받기
+            //   am start -n com.hellzgate.replayvideo/.MainActivity --es cdbSync "Hellzgate/EdoKroCDB"
+            try
+            {
+                string sync = Intent.GetStringExtra("cdbSync");
+                if (!string.IsNullOrEmpty(sync))
+                {
+                    var repos = CdbRepoStore.Load();
+                    CdbRepo target = null;
+                    foreach (var r in repos)
+                        if ((r.Url ?? "").IndexOf(sync, StringComparison.OrdinalIgnoreCase) >= 0) { target = r; break; }
+                    if (target == null)
+                    {
+                        target = new CdbRepo { Url = sync.StartsWith("http") ? sync : "https://github.com/" + sync.Trim('/') };
+                        target.Name = target.Slug;
+                        repos.Add(target);
+                    }
+                    target.Enabled = true;
+                    target.Update = true;
+                    foreach (var r in repos) if (!ReferenceEquals(r, target)) r.Enabled = false;   // 테스트는 하나만
+                    LogLine("테스트 훅: cdbSync " + target.Url);
+                    new Handler(Looper.MainLooper).PostDelayed(delegate { StartCdbSync(repos); }, 800);
+                }
+            }
+            catch (Exception ex) { LogLine("cdbSync 훅 오류: " + ex.Message); }
 
             // 2026-11-07: 진단 로그는 테스트 훅에서만. 일반 실행은 안내 한 줄.
             LogLine("준비 완료 — [1. 리플레이 선택] 으로 시작하세요.");
@@ -184,8 +245,92 @@ namespace ReplayVideoAndroid
             catch (Exception ex) { LogLine("테스트 훅 오류: " + ex.Message); }
         }
 
-        private Button MakeButton(string text, bool primary = false)
+        // ── 카드 DB(cdb) ───────────────────────────────────────
+        private void LoadCdb()
         {
+            try
+            {
+                var repos = CdbRepoStore.Load();
+                var files = CdbRepoStore.ResolveCdbFiles(repos);
+                if (_cdb != null) { try { _cdb.Close(); } catch { } _cdb = null; }
+                if (files.Count > 0) _cdb = CdbDb.Open(files);
+                int n = _cdb != null ? _cdb.FileCount : 0;
+                if (_cdbBtn != null) _cdbBtn.Text = n > 0 ? string.Format("카드 DB (cdb {0}개)", n) : "카드 DB (레포)";
+                if (n > 0) LogLine(string.Format("카드DB: cdb {0}개 · 카드 {1}장", n, _cdb.CountAll()));
+            }
+            catch (Exception ex) { LogLine("카드DB 오류: " + ex.Message); }
+        }
+
+        private void ShowCdbDialog()
+        {
+            try
+            {
+                var repos = CdbRepoStore.Load();
+                var names = new string[repos.Count];
+                var checks = new bool[repos.Count];
+                for (int i = 0; i < repos.Count; i++)
+                {
+                    int c = CdbRepoStore.CountCdb(CdbRepoStore.LocalDirOf(repos[i]));
+                    names[i] = repos[i].Name + (c > 0 ? "  ✔ cdb " + c : "  (없음)");
+                    checks[i] = repos[i].Enabled;
+                }
+                new AlertDialog.Builder(this)
+                    .SetTitle("카드 DB 레포 — 받아서 사용")
+                    .SetMultiChoiceItems(names, checks, new MultiChoiceListener(delegate (int which, bool isChecked)
+                    {
+                        repos[which].Enabled = isChecked;
+                    }))
+                    .SetPositiveButton("받기 / 갱신", delegate { StartCdbSync(repos); })
+                    .SetNegativeButton("닫기", delegate { CdbRepoStore.Save(repos); LoadCdb(); })
+                    .Show();
+            }
+            catch (Exception ex) { LogLine("카드DB 창 오류: " + ex.Message); }
+        }
+
+        private void StartCdbSync(System.Collections.Generic.List<CdbRepo> repos)
+        {
+            if (_busy) { LogLine("렌더 중에는 카드 DB 를 받을 수 없습니다."); return; }
+            CdbRepoStore.Save(repos);
+            var targets = new System.Collections.Generic.List<CdbRepo>();
+            foreach (var r in repos)
+                if (r.Enabled && (r.Update || CdbRepoStore.CountCdb(CdbRepoStore.LocalDirOf(r)) == 0)) targets.Add(r);
+            if (targets.Count == 0) { LogLine("받을 레포가 없습니다(이미 모두 받음)"); LoadCdb(); return; }
+
+            SetStatus(string.Format("카드 DB {0}개 받는 중…", targets.Count));
+            LogLine("=== 카드 DB 레포 받기: " + targets.Count + "개 ===");
+            Task.Run(delegate
+            {
+                int ok = 0, fail = 0;
+                foreach (var r in targets)
+                {
+                    var repo = r;
+                    RunOnUiThread(delegate { SetStatus("받는 중: " + repo.Name); });
+                    RunOnUiThread(delegate { LogLine("[ " + repo.Name + " ] " + repo.Url); });
+                    bool done = CdbRepoStore.Sync(repo, delegate (string s) { RunOnUiThread(delegate { LogLine(s); }); });
+                    if (done) ok++; else fail++;
+                    RunOnUiThread(delegate { LogLine("  → " + repo.Status); });
+                }
+                RunOnUiThread(delegate
+                {
+                    LogLine(string.Format("=== 끝: 성공 {0} · 실패 {1} ===", ok, fail));
+                    SetStatus("카드 DB 갱신 완료");
+                    LoadCdb();
+                });
+            });
+        }
+
+        /// <summary>AlertDialog 다중 선택 리스너 — Xamarin 은 interface 구현이 필요하다.</summary>
+        private sealed class MultiChoiceListener : Java.Lang.Object, IDialogInterfaceOnMultiChoiceClickListener
+        {
+            private readonly Action<int, bool> _cb;
+            public MultiChoiceListener(Action<int, bool> cb) { _cb = cb; }
+            public void OnClick(IDialogInterface dialog, int which, bool isChecked)
+            {
+                try { _cb(which, isChecked); } catch { }
+            }
+        }
+
+        private Button MakeButton(string text, bool primary = false)        {
             var b = new Button(this);
             b.Text = text;
             b.SetAllCaps(false);
@@ -263,7 +408,7 @@ namespace ReplayVideoAndroid
             try
             {
                 string root = Path.Combine(FilesDir.AbsolutePath, "rv");
-                var lib = new CardLibrary(root, null) { ApiEnabled = true, TranslateEnabled = true, Log = LogLine };
+                var lib = new CardLibrary(root, null) { ApiEnabled = true, TranslateEnabled = true, Log = LogLine, Cdb = _cdb };
                 LogLine("리플레이 파싱…");
                 ReplayFile rep = ReplayParser.Parse(_replayPath);
                 LogLine(string.Format("{0} 패킷 · {1} 턴", rep.PacketCount, rep.TurnCount));

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0-android</TargetFramework>
@@ -10,20 +10,22 @@
     <AssemblyName>ReplayVideoAndroid</AssemblyName>
     <ApplicationId>com.hellzgate.replayvideo</ApplicationId>
     <ApplicationTitle>리플레이 영상</ApplicationTitle>
-    <ApplicationVersion>2</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <ApplicationVersion>3</ApplicationVersion>
+    <ApplicationDisplayVersion>1.1</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
     <EnableLLVM>false</EnableLLVM>
-    <Version>1.0</Version>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.1</Version>
+    <FileVersion>1.1.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
     <PackageReference Include="SharpCompress" Version="0.48.0" />
+    <!-- cdb(SQLite) 읽기 — 레포에서 받은 카드 DB -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
   </ItemGroup>
 
   <ItemGroup>

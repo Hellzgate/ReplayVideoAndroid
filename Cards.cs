@@ -34,6 +34,8 @@ namespace ReplayVideoCore
         public bool ApiEnabled = true;
         public bool TranslateEnabled = true;
         public Action<string> Log;
+        /// <summary>cdb 카드 DB(레포에서 받은 것). null 이면 API 만 사용.</summary>
+        public CdbDb Cdb;
 
         public CardLibrary(string root, string picsDir)
         {
@@ -128,10 +130,23 @@ namespace ReplayVideoCore
             if (code <= 0) return "";
             lock (_names) { string v; if (_names.TryGetValue(code, out v)) return v; }
 
+            CdbCard cd = null;
+            if (Cdb != null) Cdb.TryGet(code, out cd);
+
+            // ① cdb 이름이 한국어면 그대로 (가장 정확·빠름)
+            if (cd != null && !string.IsNullOrEmpty(cd.Name) && HasHangul(cd.Name))
+            { lock (_names) _names[code] = cd.Name; return cd.Name; }
+
+            // ② API 한국어
             CardRec ko = ApiKo(code);
             if (ko != null && !string.IsNullOrEmpty(ko.Name) && HasHangul(ko.Name))
             { lock (_names) _names[code] = ko.Name; return ko.Name; }
 
+            // ③ cdb 이름(영문 등 — 커스텀 카드는 API 에 없어 여기서 해결)
+            if (cd != null && !string.IsNullOrEmpty(cd.Name))
+            { lock (_names) _names[code] = cd.Name; return cd.Name; }
+
+            // ④ API(영문/기타) → #ID
             CardRec r = ApiRec(code);
             string name = (r != null && !string.IsNullOrEmpty(r.Name)) ? r.Name : ("#" + code);
             lock (_names) _names[code] = name;
@@ -143,8 +158,18 @@ namespace ReplayVideoCore
             if (code <= 0) return null;
             lock (_descs) { string v; if (_descs.TryGetValue(code, out v)) return v; }
 
+            CdbCard cd = null;
+            if (Cdb != null) Cdb.TryGet(code, out cd);
+
+            if (cd != null && !string.IsNullOrEmpty(cd.Desc) && HasHangul(cd.Desc))
+            { lock (_descs) _descs[code] = cd.Desc; return cd.Desc; }
+
             CardRec ko = ApiKo(code);
             if (ko != null && !string.IsNullOrEmpty(ko.Desc)) { lock (_descs) _descs[code] = ko.Desc; return ko.Desc; }
+
+            if (cd != null && !string.IsNullOrEmpty(cd.Desc))
+            { lock (_descs) _descs[code] = cd.Desc; return cd.Desc; }   // 영문 → DescKo 가 번역
+
             CardRec r = ApiRec(code);
             string d = (r != null) ? r.Desc : null;
             lock (_descs) _descs[code] = d;
@@ -155,6 +180,13 @@ namespace ReplayVideoCore
         {
             if (code <= 0) return -1;
             lock (_atk) { int v; if (_atk.TryGetValue(code, out v)) return v; }
+
+            if (Cdb != null)
+            {
+                CdbCard cd;
+                if (Cdb.TryGet(code, out cd) && cd.Atk >= 0)
+                { lock (_atk) _atk[code] = cd.Atk; return cd.Atk; }
+            }
             CardRec r = ApiRec(code);
             int a = (r != null) ? r.Atk : -1;
             lock (_atk) _atk[code] = a;
