@@ -16,7 +16,9 @@ namespace ReplayVideoCore
         public int CardW = 86, CardH = 123;
         public const int Gap = 8;
         public int FieldX = 176;
+        public int FieldZoneX = 82;
         public int OppSzY = 76, OppMzY = 76 + 123 + 6;
+        public int EmzY = 468 - 123 - 8;
         public int MyMzY = 468, MySzY = 468 + 123 + 6;
         public bool Portrait;
 
@@ -39,24 +41,32 @@ namespace ReplayVideoCore
             if (portrait)
             {
                 W = 1080; H = 1920;
-                CardW = 190; CardH = 273;
-                FieldX = 49;
+                CardW = 165; CardH = 238;               // 필드마법 존까지 6칸
+                FieldZoneX = 25;
+                FieldX = FieldZoneX + CardW + Gap;
                 OppSzY = 96; OppMzY = OppSzY + CardH + 8;
-                MyMzY = 770; MySzY = MyMzY + CardH + 8;
+                EmzY = OppMzY + CardH + 8;
+                MyMzY = EmzY + CardH + 8;
+                MySzY = MyMzY + CardH + 8;
             }
             else
             {
                 W = 1400; H = 820;
                 CardW = 86; CardH = 123;
+                FieldZoneX = 82;
                 FieldX = 176;
                 OppSzY = 76; OppMzY = OppSzY + CardH + 6;
-                MyMzY = 468; MySzY = MyMzY + CardH + 6;
+                EmzY = OppMzY + CardH + 8;
+                MyMzY = EmzY + CardH + 8;
+                MySzY = MyMzY + CardH + 6;
             }
             Layout.W = W; Layout.H = H;
             Layout.CardW = CardW; Layout.CardH = CardH; Layout.Gap = Gap;
             Layout.FieldX = FieldX;
             Layout.OppSzY = OppSzY; Layout.OppMzY = OppMzY;
             Layout.MyMzY = MyMzY; Layout.MySzY = MySzY;
+            Layout.EmzY = EmzY;
+            Layout.FieldZoneX = FieldZoneX;
         }
 
         // ── 폰트(한글 포함) ───────────────────────────────────
@@ -260,8 +270,11 @@ namespace ReplayVideoCore
             // 존 배경
             DrawZoneRow(c, OppSzY);
             DrawZoneRow(c, OppMzY);
+            DrawEmz(c);
             DrawZoneRow(c, MyMzY);
             DrawZoneRow(c, MySzY);
+            DrawFieldZone(c, OppSzY);
+            DrawFieldZone(c, MySzY);
 
             // 손패/묘지/제외
             if (Portrait)
@@ -275,12 +288,12 @@ namespace ReplayVideoCore
             }
             else
             {
-                DrawHand(c, sim, 1, 8, 78, sub, white);
-                DrawHand(c, sim, 0, 8, 452, sub, white);
-                DrawPile(c, sim, 700, OppSzY, "상대 묘지", sim.Grave[1], sub, white, 52, 75, 8);
-                DrawPile(c, sim, 700, OppSzY + 128, "상대 제외", sim.Banished[1], sub, white, 52, 75, 8);
-                DrawPile(c, sim, 700, MyMzY, "내 묘지", sim.Grave[0], sub, white, 52, 75, 8);
-                DrawPile(c, sim, 700, MyMzY + 128, "내 제외", sim.Banished[0], sub, white, 52, 75, 8);
+                DrawHand(c, sim, 1, 660, 78, sub, white);
+                DrawHand(c, sim, 0, 660, 452, sub, white);
+                DrawPile(c, sim, 820, OppSzY, "상대 묘지", sim.Grave[1], sub, white, 52, 75, 8);
+                DrawPile(c, sim, 820, OppSzY + 128, "상대 제외", sim.Banished[1], sub, white, 52, 75, 8);
+                DrawPile(c, sim, 820, MyMzY, "내 묘지", sim.Grave[0], sub, white, 52, 75, 8);
+                DrawPile(c, sim, 820, MyMzY + 128, "내 제외", sim.Banished[0], sub, white, 52, 75, 8);
             }
 
             // 카드(보간)
@@ -311,26 +324,33 @@ namespace ReplayVideoCore
                     sim.Hi.Contains(key), sim.Tg.Contains(key), key, sim.Reveal.Contains(key), white);
             }
 
-            // 체인 패널
+            // 체인 패널 (상단 띠 — EMZ/필드존과 겹치지 않게)
             if (sim.ChainCount > 0)
             {
-                int cpx = FieldX, cpy = Portrait ? 660 : 340, cpw = 5 * (CardW + Gap);
-                int cph = 14 + Math.Min(sim.ChainCount, 6) * 15;
+                int cpx = Portrait ? 24 : 420;
+                int cpy = Portrait ? 40 : 42;
+                int cpw = Portrait ? W - 48 : W - 440;
+                int maxLines = 2;
+                int lines = Math.Min(sim.ChainCount, maxLines);
+                int cph = 4 + lines * 14 + (sim.ChainCount > lines ? 12 : 0);
                 c.DrawRect(cpx, cpy, cpw, cph, P(10, false, C(255, 20, 36, 58), false, 0));
-                Text(c, "체인 " + sim.ChainCount, cpx + 6, cpy + 2, 11, true, acc);
-                int cy = cpy + 18;
-                for (int k = 0; k < sim.ChainCount && k < 6; k++)
+                Text(c, "체인 " + sim.ChainCount, cpx + 6, cpy + 2, 10, true, acc);
+                int cy = cpy + 15;
+                for (int k = 0; k < lines; k++)
                 {
                     Sim.Link lk = sim.ChainAt(k);
                     string mark = lk.Negated ? "X" : (lk.Solving ? "▶" : " ");
                     string nm = _lib.NameOf(lk.Code);
                     string locTag = "[" + Sim.LocName(lk.Loc) + "] ";
-                    if (nm.Length > 26) nm = nm.Substring(0, 25) + "…";
+                    int maxName = Math.Max(8, (cpw - 24) / 7);
+                    if (nm.Length > maxName) nm = nm.Substring(0, maxName - 1) + "…";
                     SKColor col = lk.Negated ? C(255, 255, 120, 120)
                                 : (lk.Solving ? C(255, 120, 240, 240) : C(255, 200, 180, 240));
-                    Text(c, string.Format("{0} {1}. {2}{3}", mark, lk.N, locTag, nm), cpx + 6, cy, 11, true, col);
-                    cy += 15;
+                    Text(c, string.Format("{0} {1}. {2}{3}", mark, lk.N, locTag, nm), cpx + 6, cy, 10, true, col);
+                    cy += 14;
                 }
+                if (sim.ChainCount > lines)
+                    Text(c, "외 " + (sim.ChainCount - lines), cpx + 6, cy, 10, true, sub);
             }
 
             // 카드 설명
@@ -387,6 +407,36 @@ namespace ReplayVideoCore
         }
 
         private int ZoneX(int seq) { return FieldX + seq * (CardW + Gap); }
+
+        private void DrawEmz(SKCanvas c)
+        {
+            using (var fill = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = C(255, 24, 20, 44) })
+            using (var pen = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.2f, Color = C(175, 150, 125, 220) })
+            {
+                pen.PathEffect = SKPathEffect.CreateDash(new float[] { 6f, 4f }, 0);
+                int[] cols = { Layout.EmzColLeft, Layout.EmzColRight };
+                foreach (int col in cols)
+                {
+                    int x = ZoneX(col);
+                    c.DrawRect(x, EmzY, CardW - 1, CardH - 1, fill);
+                    c.DrawRect(x, EmzY, CardW - 1, CardH - 1, pen);
+                    float tw = TextW("EMZ", 9, false), th = TextH(9, false);
+                    Text(c, "EMZ", x + (CardW - tw) / 2, EmzY + (CardH - th) / 2, 9, false, C(120, 110, 155));
+                }
+            }
+        }
+
+        private void DrawFieldZone(SKCanvas c, int y)
+        {
+            using (var fill = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = C(255, 18, 30, 22) })
+            using (var pen = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, Color = C(200, 95, 140, 95) })
+            {
+                c.DrawRect(FieldZoneX, y, CardW - 1, CardH - 1, fill);
+                c.DrawRect(FieldZoneX, y, CardW - 1, CardH - 1, pen);
+                float tw = TextW("필드", 9, false), th = TextH(9, false);
+                Text(c, "필드", FieldZoneX + (CardW - tw) / 2, y + (CardH - th) / 2, 9, false, C(125, 155, 125));
+            }
+        }
 
         private void DrawZoneRow(SKCanvas c, int y)
         {
